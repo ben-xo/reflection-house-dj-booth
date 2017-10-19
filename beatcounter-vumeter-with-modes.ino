@@ -1,15 +1,28 @@
 #include <Adafruit_NeoPixel.h>
 
+#define AUDIO_INPUT 0
 #define NEOPIXEL_PIN 6
 #define BUTTON_PIN 2
 #define BUTTON_LED_PIN 13
-#define MODE_LED_PIN_1 10
-#define MODE_LED_PIN_2 11
-#define MODE_LED_PIN_3 12
+#define MODE_LED_PIN_1 9
+#define MODE_LED_PIN_2 10
+#define MODE_LED_PIN_3 11
+#define MODE_LED_PIN_4 12
 #define STRIP_LENGTH 60
 
+// This is the beat detect threshold.
+// If you build a box without the pot, you can read the threshold out
+// from one which has the pot using one of the test modes...
+#define THRESHOLD_INPUT 1
+#define DEFAULT_THRESHOLD 24.0
+#define USE_POT_FOR_THRESHOLD 0
+
+#define SILVER 0xFFFFFFFF
+#define GOLD 0xFFFFFF77
+
 // modes 0 to MAX_MODE are effects
-#define MAX_MODE 6
+#define MAX_MODE 10
+#define MAX_AUTO_MODE 7
 
 // Parameter 1 = number of pixels in strip
 // Parameter 2 = pin number (most are valid)
@@ -69,17 +82,16 @@ void setup()
   pinMode(BUTTON_LED_PIN,OUTPUT);  
 
   // the pin with the mode display
-  pinMode(MODE_LED_PIN_1,OUTPUT);  
-  pinMode(MODE_LED_PIN_2,OUTPUT);  
-  pinMode(MODE_LED_PIN_3,OUTPUT);  
+  pinMode(MODE_LED_PIN_1,OUTPUT);
+  pinMode(MODE_LED_PIN_2,OUTPUT);
+  pinMode(MODE_LED_PIN_3,OUTPUT);
+  pinMode(MODE_LED_PIN_4,OUTPUT);
 
   // Initialize all pixels to 'off'
   strip.begin();
   strip.show();
   
   time = micros(); // Used to track rate
-
-  generate_random_table();
 }
 
 
@@ -88,7 +100,7 @@ void loop()
     float envelope;
     unsigned int peakToPeak;
 
-    check_mode_change_button();
+    //check_mode_change_button();
 
     // 4 loops (~50ms each). VU is on a 50ms loop, beat detection is on a 200ms loop
     // also, do fades every other render
@@ -113,14 +125,14 @@ void loop()
       }
   
       // resynchronise the beat count mode change with the song
-      if(beatless_count > 32) {
+      if(beatless_count > 40) { // about 8 seconds
         beat_count = 0;
       }
-  
-      // change mode after 64 beats
-      if(beat_count > 64) {
+
+      // change mode after 128 beats or 30 beatless seconds
+      if(beat_count > 128 || beatless_count > 150) {
         mode++;
-        if(mode > MAX_MODE) {
+        if(mode > MAX_AUTO_MODE) {
           mode = 0;
         }
         beat_count = 0;
@@ -130,6 +142,52 @@ void loop()
     for(unsigned long up = time+SAMPLEPERIODUS; up-time > 0 && up-time < 1024; time = micros()) {
       // empty loop, to consume excess clock cycles, to keep at 5000 hz  
     }
+}
+
+void render(unsigned int peakToPeak, bool is_beat, bool do_fade, char mode) {
+
+    switch(mode) {
+      case 0:
+        render_vu_plus_beat_end(peakToPeak, is_beat, do_fade);
+        break;
+      case 1:
+        render_shoot_pixels(peakToPeak, is_beat, do_fade);
+        break;
+      case 2:
+        render_double_vu(peakToPeak, is_beat, do_fade, 0);
+        break;
+      case 3:
+        render_vu_plus_beat_interleave(peakToPeak, is_beat, do_fade);
+        break;
+      case 4:
+        render_double_vu(peakToPeak, is_beat, do_fade, 1);
+        break;
+      case 5:
+        render_stream_pixels(peakToPeak, is_beat, do_fade);
+        break;
+      case 6:
+        render_sparkles(peakToPeak, is_beat, do_fade);
+        break;
+      case 7:
+        render_double_vu(peakToPeak, is_beat, do_fade, 2);
+        break;
+
+      // these modes suck
+      case 8:
+        render_beat_line(peakToPeak, is_beat, do_fade);
+        break;
+      case 9:
+        render_beat_flash_1_pixel(is_beat);
+        break;
+      case 10:
+        render_threshold();
+        break;
+      default:
+        render_black();
+        break;
+    }
+
+    strip.show();
 }
 
 unsigned int read_vu_meter_and_beat_envelope(float &envelope) {
@@ -144,7 +202,7 @@ unsigned int read_vu_meter_and_beat_envelope(float &envelope) {
     // This loops collects VU data and does beat detection for 50 mS
     while (millis() - startMillis < sampleWindow)
     {
-      sample_i = analogRead(0);
+      sample_i = analogRead(AUDIO_INPUT);
       if (sample_i < 1024)  // toss out spurious readings
       {
         if (sample_i > signalMax)
@@ -177,49 +235,17 @@ bool beat_detect(float &envelope) {
     beat = beatFilter(envelope);
 
     // Threshold is based on potentiometer on AN1
-    thresh = 0.02f * (float)analogRead(1);
+#if USE_POT_FOR_THRESHOLD
+    thresh = 0.02f * (float)analogRead(THRESHOLD_INPUT);
+#else
+    thresh = 0.02f * DEFAULT_THRESHOLD;
+#endif
 
     // If we are above threshold, FOUND A BEAT
     if(beat > thresh) {
       return true;
     }
     return false;
-}
-
-void render(unsigned int peakToPeak, bool is_beat, bool do_fade, char mode) {
-
-    switch(mode) {
-      case 0:
-        render_vu_plus_beat_end(peakToPeak, is_beat, do_fade);
-        break;
-      case 1:
-        render_shoot_pixels(peakToPeak, is_beat, do_fade);
-        break;
-      case 2:
-        render_double_vu(peakToPeak, is_beat, do_fade);
-        break;
-      case 3:
-        render_vu_plus_beat_interleave(peakToPeak, is_beat, do_fade);
-        break;
-      case 4:
-        render_double_vu_fade_2(peakToPeak, is_beat, do_fade);
-        break;
-      case 5:
-        render_stream_pixels(peakToPeak, is_beat, do_fade);
-        break;
-      case 6:
-        render_sparkles(peakToPeak, is_beat, do_fade);
-        break;
-      case 7:
-        render_double_vu_fade_3(peakToPeak, is_beat, do_fade);
-        //render_beat_flash_1_pixel(is_beat);
-        break;
-      default:
-        render_black();
-        break;
-    }
-
-    strip.show();
 }
 
 void render_vu_plus_beat_end(unsigned int peakToPeak, bool is_beat, bool do_fade) {
@@ -234,7 +260,7 @@ void render_vu_plus_beat_end(unsigned int peakToPeak, bool is_beat, bool do_fade
           int color = map(j, 0, STRIP_LENGTH, 0, 255);
           strip.setPixelColor(j, Wheel(color));
         }
-        else if(j >= 48 && j < 60 && is_beat) {
+        else if(j >= STRIP_LENGTH/2 && j < STRIP_LENGTH && is_beat) {
           strip.setPixelColor(j, beat_brightness,beat_brightness,beat_brightness);
         }
         else if(do_fade) {
@@ -245,9 +271,8 @@ void render_vu_plus_beat_end(unsigned int peakToPeak, bool is_beat, bool do_fade
 
 void render_stream_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade) {
     int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH/2 - 1) - 1;
-    int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
     
-    for (int j = STRIP_LENGTH-1; j > 0; j--)
+    for (int j = STRIP_LENGTH-1; j >= 0; j--)
     {
       if(j <= led && led >= 0) {
         // set VU color up to peak
@@ -264,7 +289,6 @@ void render_stream_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade) {
 void render_shoot_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade) {
     // only VU half the strip; for the effect to work it needs headroom.
     int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH >> 1 - 1) - 1;
-    int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
     
     for (int j = STRIP_LENGTH - 1; j >= 0; j--)
     {
@@ -274,11 +298,9 @@ void render_shoot_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade) {
         strip.setPixelColor(j, Wheel_Purple_Yellow(color));
       }
       else {
-        if(do_fade) {
-          shoot_pixel(j);
-          if(!is_beat) {
-            fade_pixel(j);
-          }
+        shoot_pixel(j);
+        if(!is_beat && do_fade) {
+          fade_pixel_plume(j);
         }
       }
     }  
@@ -308,104 +330,76 @@ void render_vu_plus_beat_interleave(unsigned int peakToPeak, bool is_beat, bool 
   }
 }
 
-void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade) {
-    int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH/4 - 1) - 1;
-    int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
-    
-    for (int j = 0; j <= STRIP_LENGTH/4; j++)
-    {
-      // 2 "pixels" "below" the strip, to exclude the noise floor from the VU
-        if(j <= led && led >= 0) {
-          // set VU color up to peak
-          int color = map(j, 0, STRIP_LENGTH/4, 0, 255);
-          strip.setPixelColor(j, Wheel(color));
-          strip.setPixelColor((STRIP_LENGTH/4*2)+j, Wheel(color));
-          color = map(j, 0, STRIP_LENGTH/4, 255, 0);
-          strip.setPixelColor((STRIP_LENGTH/4*2)-j, Wheel(color));
-          strip.setPixelColor((STRIP_LENGTH/4*4)-j, Wheel(color));
-        }
-        else if(do_fade) {
-          fade_pixel(j);
-          fade_pixel((STRIP_LENGTH/4*2)+j);
-          fade_pixel((STRIP_LENGTH/4*2)-j);
-          fade_pixel((STRIP_LENGTH/4*4)-j);
-        }
-    }  
-}
-
 void render_sparkles(unsigned int peakToPeak, bool is_beat, bool do_fade) {
-    int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH -1);
-    
-    int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
-    
-    for (int j = 0; j <= STRIP_LENGTH/4; j++)
-    {
-      // 2 "pixels" "below" the strip, to exclude the noise floor from the VU
-        if(j <= led && led >= 0) {
-          // set VU color up to peak
-          int color = map(j, 0, STRIP_LENGTH/4, 0, 255);
-          strip.setPixelColor(j, Wheel(color));
-          strip.setPixelColor((STRIP_LENGTH/4*2)+j, Wheel(color));
-          color = map(j, 0, STRIP_LENGTH/4, 255, 0);
-          strip.setPixelColor((STRIP_LENGTH/4*2)-j, Wheel(color));
-          strip.setPixelColor((STRIP_LENGTH/4*4)-j, Wheel(color));
-        }
-        else if(do_fade) {
-          fade_pixel(j);
-          fade_pixel((STRIP_LENGTH/4*2)+j);
-          fade_pixel((STRIP_LENGTH/4*2)-j);
-          fade_pixel((STRIP_LENGTH/4*4)-j);
-        }
-    }  
-}
-
-void render_double_vu_fade_2(unsigned int peakToPeak, bool is_beat, bool do_fade) {
-    int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH >> 2 - 1) - 1;
-    int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
-    
-    for (int j = 0; j <= STRIP_LENGTH >> 2; j++)
-    {
-      // 2 "pixels" "below" the strip, to exclude the noise floor from the VU
-        if(j <= led && led >= 0) {
-          // set VU color up to peak
-          int color = map(j, 0, STRIP_LENGTH >> 2, 0, 255);
-          strip.setPixelColor(j, Wheel2(color));
-          strip.setPixelColor((STRIP_LENGTH >> 1)+j, Wheel2(color));
-          strip.setPixelColor((STRIP_LENGTH >> 1)-j, Wheel2(color));
-          strip.setPixelColor((STRIP_LENGTH     )-j, Wheel2(color));
-        }
-        else if(do_fade) {
-          fade_pixel(j);
-          fade_pixel((STRIP_LENGTH >> 1)+j);
-          fade_pixel((STRIP_LENGTH >> 1)-j);
-          fade_pixel((STRIP_LENGTH     )-j);
-        }
+    if(do_fade) {
+      for (int j = 0; j < STRIP_LENGTH; j++)
+      {
+        fade_pixel(j);
+      }
+    }
+    int index = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH/3 );
+    if(index >= 0) {
+      generate_sparkle_table();
+      for (int j = 0; j <= index; j++) {
+        strip.setPixelColor(random_table[j], j%2 ? GOLD : SILVER);
+      }
     }
 }
 
-void render_double_vu_fade_3(unsigned int peakToPeak, bool is_beat, bool do_fade) {
-    int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH >> 2 - 1) - 1;
-    int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
-    
-    for (int j = 0; j <= STRIP_LENGTH >> 2; j++)
+void render_beat_line(unsigned int peakToPeak, bool is_beat, bool do_fade) {
+    int color = map(peakToPeak, 0, maximum, 0, 255);
+    for (int j = STRIP_LENGTH - 1; j > 0; j--)
     {
-      // 2 "pixels" "below" the strip, to exclude the noise floor from the VU
-        if(j <= led && led >= 0) {
-          // set VU color up to peak
-          int color = map(j, 0, STRIP_LENGTH >> 2, 0, 255);
-          strip.setPixelColor(j, Wheel3(color));
-          strip.setPixelColor((STRIP_LENGTH >> 1)+j, Wheel3(color));
-          strip.setPixelColor((STRIP_LENGTH >> 1)-j, Wheel3(color));
-          strip.setPixelColor((STRIP_LENGTH     )-j, Wheel3(color));
-        }
-        else if(do_fade) {
-          fade_pixel(j);
-          fade_pixel((STRIP_LENGTH >> 1)+j);
-          fade_pixel((STRIP_LENGTH >> 1)-j);
-          fade_pixel((STRIP_LENGTH     )-j);
-        }
-    } 
+      // shift all the pixels along
+      strip.setPixelColor(j, strip.getPixelColor(j-1));
+    }
+    if(is_beat) {
+      strip.setPixelColor(0, 255, 255, 255);
+    } else {
+      strip.setPixelColor(0, color >> 2, color >> 2, color >> 2);
+    }
 }
+
+void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char fade_type) {
+    uint32_t color;
+    // 2 "pixels" "below" the strip, to exclude the noise floor from the VU
+    int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH/2);
+    
+    for (int j = 0; j <= STRIP_LENGTH/4; j++)
+    {
+      if(j <= led && led >= 0) {
+        
+        // set VU color up to peak
+        color = map(j, 0, STRIP_LENGTH/4, 0, 255);
+        switch(fade_type) {
+          default:
+          case 0: color = Wheel(color); break;
+          case 1: color = Wheel2(color); break;
+          case 2: color = Wheel3(color); break;
+        }
+        strip.setPixelColor(j, color);
+        strip.setPixelColor((STRIP_LENGTH/2)+j, color);
+        
+        // set VU color up to peak
+        color = map(j, 0, STRIP_LENGTH/4, 255, 0);
+        switch(fade_type) {
+          default:
+          case 0: color = Wheel(color); break;
+          case 1: color = Wheel2(color); break;
+          case 2: color = Wheel3(color); break;
+        }
+        strip.setPixelColor((STRIP_LENGTH/2)-j, color);
+        strip.setPixelColor((STRIP_LENGTH)-j, color);
+      }
+      else if(do_fade) {
+        fade_pixel(j);
+        fade_pixel((STRIP_LENGTH/2)+j);
+        fade_pixel((STRIP_LENGTH/2)-j);
+        fade_pixel((STRIP_LENGTH  )-j);
+      }
+    }  
+}
+
 void render_beat_flash_1_pixel(bool is_beat) {
     // THIS BIT FLASHES ONE LED SO YOU CAN SEE THE BEATS
     if(is_beat) {
@@ -416,6 +410,20 @@ void render_beat_flash_1_pixel(bool is_beat) {
     for (int j = STRIP_LENGTH - 1; j >= 1; j--) {
       strip.setPixelColor(j, 0);
     }  
+}
+
+void render_threshold() {
+  // THIS BIT DRAWS A NUMBER IN BINARY ON TO THE STRIP
+  unsigned int threshold = analogRead(THRESHOLD_INPUT);
+  for(int i = 0; i < STRIP_LENGTH; i++)
+  {
+    if (threshold & 0x01) {
+      strip.setPixelColor(i, strip.Color(127,127,127));
+    } else {
+      strip.setPixelColor(i, 0);
+    }
+    threshold = threshold >> 1;
+  }
 }
 
 void render_black() {
@@ -432,6 +440,21 @@ void fade_pixel(int pixel) {
   uint32_t color = strip.getPixelColor(pixel);
   color = (color >> 1) & 0x7F7F7F7F; // shift and mask WRGB all at once.
   strip.setPixelColor(pixel, color);
+}
+
+// fades pixels more the closer they are the start, so that peaks stay visible
+void fade_pixel_plume(int pixel) {
+  float fade_factor;
+  if(pixel < STRIP_LENGTH >> 1) {
+    fade_factor = map(pixel, 0, STRIP_LENGTH >> 1, 0.5, 1.0);  
+  } else {
+    fade_factor = map(pixel, STRIP_LENGTH >> 1, STRIP_LENGTH, 1.0, 0.5);  
+  }
+  uint32_t color = strip.getPixelColor(pixel);
+  uint8_t r = color >> 16;
+  uint8_t g = color >> 8;
+  uint8_t b = color;
+  strip.setPixelColor(pixel, r*fade_factor, g*fade_factor, b*fade_factor);
 }
 
 
@@ -459,10 +482,10 @@ void stream_pixel(int pixel) {
 void shoot_pixel(int pixel) {
   uint32_t color;
   
-  if(pixel >= 3) {
+  if(pixel >= 4) {
     color  = (strip.getPixelColor(pixel-2) >> 1) & 0x7F7F7F7F;
     color += (strip.getPixelColor(pixel-3) >> 2) & 0x3F3F3F3F;
-//    color += (strip.getPixelColor(pixel-3) >> 3) & 0x1F1F1F1F;    
+    color += (strip.getPixelColor(pixel-4) >> 3) & 0x1F1F1F1F;    
   } else {
     fade_pixel(pixel);
   }
@@ -478,7 +501,10 @@ void check_mode_change_button() {
     if(button_was_pushed && !button_is_pushed) {
       // button was released
       button_was_pushed = false;
-      mode = (mode + 1) % 8;
+      mode = (mode + 1);
+      if(mode > MAX_MODE) {
+        mode = 0;
+      }
     } else if(button_is_pushed) {
       button_was_pushed = true;
       // pushing the button cancels auto mode.
@@ -490,10 +516,11 @@ void check_mode_change_button() {
       digitalWrite(MODE_LED_PIN_1, (mode & 0x01) ? HIGH : LOW);
       digitalWrite(MODE_LED_PIN_2, (mode & 0x02) ? HIGH : LOW);
       digitalWrite(MODE_LED_PIN_3, (mode & 0x04) ? HIGH : LOW);
+      digitalWrite(MODE_LED_PIN_4, (mode & 0x08) ? HIGH : LOW);
     }
 }
 
-void generate_random_table() {
+void generate_sparkle_table() {
   int i;
   
   for (i = 0; i < STRIP_LENGTH; i++) {
@@ -501,7 +528,9 @@ void generate_random_table() {
   }
 
   // shuffle!
-  for (i = 0; i < STRIP_LENGTH; i++)
+  // we only shuffle HALF the table, because render_sparkle
+  // only 
+  for (i = 0; i < STRIP_LENGTH / 2; i++)
   {
       size_t j = random(0, STRIP_LENGTH - i);
     
@@ -525,7 +554,12 @@ uint32_t Wheel(byte WheelPos) {
 }
 
 uint32_t Wheel2(byte WheelPos) {
-  return strip.Color(WheelPos + 128 > 255 ? 255 : WheelPos + 128, 0, 128-WheelPos/2 < 0 ? 0 : 128-WheelPos/2);
+  // 0 is blue (0,0,255)
+  // 255 is yellow (255,127,0)
+  return strip.Color(
+    WheelPos, 
+    WheelPos >> 1, 
+    255-WheelPos);
 }
 
 uint32_t Wheel3(byte WheelPos) {
