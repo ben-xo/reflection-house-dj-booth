@@ -1,6 +1,13 @@
 #include <Adafruit_NeoPixel.h>
+#include <FIR.h>
+
+#define SERIAL_DEBUG 0
+
+#define FILTERTAPS 13
 
 #define AUDIO_INPUT 0
+#define AUDIO_INPUT_LP 2
+#define AUDIO_INPUT_HP 3
 #define NEOPIXEL_PIN 6
 #define BUTTON_PIN 2
 #define BUTTON_LED_PIN 13
@@ -33,8 +40,14 @@
 //   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(STRIP_LENGTH, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
+FIR lowPass = FIR();
+FIR highPass = FIR();
+
 const int sampleWindow = 10; // Sample window width in mS (50 mS = 20Hz)
+
 unsigned int sample_i;
+unsigned int sample_lp_i;
+unsigned int sample_hp_i;
 int maximum = 110;
 bool is_beat;
 unsigned long time;
@@ -53,6 +66,39 @@ bool auto_mode = true;
 // button to change modes. button_was_pushed used to track when button was released.
 char mode = 0;
 bool button_was_pushed = false;
+
+static float lowPassCoeffs[] = {
+0.058941394880239056,
+0.067400917530924781,
+0.074796392092324623,
+0.080855873165259634,
+0.085354127494019216,
+0.088122662998354445,
+0.089057263677756390,
+0.088122662998354445,
+0.085354127494019216,
+0.080855873165259634,
+0.074796392092324623,
+0.067400917530924781,
+0.058941394880239056
+};
+
+static float highPassCoeffs[] = {
+0.014626551404255866,
+0.067123004554128479,
+0.067975933892614401,
+-0.014742802807857579,
+-0.159650634117853740,
+-0.297951941959363475,
+0.645239778068152026,
+-0.297951941959363475,
+-0.159650634117853740,
+-0.014742802807857579,
+0.067975933892614401,
+0.067123004554128479,
+0.014626551404255866
+};
+ 
 
 // Arduino Beat Detector By Damian Peckett 2015
 // License: Public Domain.
@@ -92,29 +138,38 @@ void setup()
   strip.show();
   
   time = micros(); // Used to track rate
+
+  lowPass.setCoefficients(lowPassCoeffs);
+  lowPass.setGain(1.0);
+  highPass.setCoefficients(highPassCoeffs);
+  highPass.setGain(1.0);
+  
+  Serial.begin(112500);
 }
 
-
+#define RENDER_P2P peakToPeak
 void loop()
 {
     float envelope;
     unsigned int peakToPeak;
+    unsigned int peakToPeakLP;
+    unsigned int peakToPeakHP;
 
-    //check_mode_change_button();
+    check_mode_change_button();
 
     // 4 loops (~50ms each). VU is on a 50ms loop, beat detection is on a 200ms loop
     // also, do fades every other render
     
-    peakToPeak = read_vu_meter_and_beat_envelope(envelope);
-    render(peakToPeak, is_beat, true, mode);
-    peakToPeak = read_vu_meter_and_beat_envelope(envelope);
-    render(peakToPeak, is_beat, false, mode);
-    peakToPeak = read_vu_meter_and_beat_envelope(envelope);
-    render(peakToPeak, is_beat, true, mode);
-    peakToPeak = read_vu_meter_and_beat_envelope(envelope);
+    peakToPeak = read_vu_meter_and_beat_envelope(envelope, peakToPeakLP, peakToPeakHP);
+    render(RENDER_P2P, is_beat, true, mode, peakToPeakLP, peakToPeakHP);
+    peakToPeak = read_vu_meter_and_beat_envelope(envelope, peakToPeakLP, peakToPeakHP);
+    render(RENDER_P2P, is_beat, false, mode, peakToPeakLP, peakToPeakHP);
+    peakToPeak = read_vu_meter_and_beat_envelope(envelope, peakToPeakLP, peakToPeakHP);
+    render(RENDER_P2P, is_beat, true, mode, peakToPeakLP, peakToPeakHP);
+    peakToPeak = read_vu_meter_and_beat_envelope(envelope, peakToPeakLP, peakToPeakHP);
     // Every 200 samples (25hz) filter the envelope 
     is_beat = beat_detect(envelope);
-    render(peakToPeak, is_beat, false, mode);
+    render(RENDER_P2P, is_beat, false, mode, peakToPeakLP, peakToPeakHP);
 
     if(auto_mode) {
       if(is_beat) {
@@ -144,23 +199,23 @@ void loop()
     }
 }
 
-void render(unsigned int peakToPeak, bool is_beat, bool do_fade, char mode) {
+void render(unsigned int peakToPeak, bool is_beat, bool do_fade, char mode, unsigned int lpvu, unsigned int hpvu) {
 
     switch(mode) {
       case 0:
-        render_vu_plus_beat_end(peakToPeak, is_beat, do_fade);
+        render_vu_plus_beat_end(peakToPeak, is_beat, do_fade, lpvu, hpvu);
         break;
       case 1:
-        render_shoot_pixels(peakToPeak, is_beat, do_fade);
+        render_shoot_pixels(peakToPeak, is_beat, do_fade, lpvu, hpvu);
         break;
       case 2:
-        render_double_vu(peakToPeak, is_beat, do_fade, 0);
+        render_double_vu(peakToPeak, is_beat, do_fade, 0, lpvu, hpvu);
         break;
       case 3:
-        render_vu_plus_beat_interleave(peakToPeak, is_beat, do_fade);
+        render_vu_plus_beat_interleave(peakToPeak, is_beat, do_fade, lpvu, hpvu);
         break;
       case 4:
-        render_double_vu(peakToPeak, is_beat, do_fade, 1);
+        render_double_vu(peakToPeak, is_beat, do_fade, 1, lpvu, hpvu);
         break;
       case 5:
         render_stream_pixels(peakToPeak, is_beat, do_fade);
@@ -169,7 +224,7 @@ void render(unsigned int peakToPeak, bool is_beat, bool do_fade, char mode) {
         render_sparkles(peakToPeak, is_beat, do_fade);
         break;
       case 7:
-        render_double_vu(peakToPeak, is_beat, do_fade, 2);
+        render_double_vu(peakToPeak, is_beat, do_fade, 2, lpvu, hpvu);
         break;
 
       // these modes suck
@@ -190,7 +245,7 @@ void render(unsigned int peakToPeak, bool is_beat, bool do_fade, char mode) {
     strip.show();
 }
 
-unsigned int read_vu_meter_and_beat_envelope(float &envelope) {
+unsigned int read_vu_meter_and_beat_envelope(float &envelope, unsigned int &peakToPeakLP, unsigned int &peakToPeakHP) {
     float sample, value, thresh;
     
     unsigned long startMillis = millis(); // Start of sample window
@@ -198,11 +253,17 @@ unsigned int read_vu_meter_and_beat_envelope(float &envelope) {
   
     unsigned int signalMax = 0;
     unsigned int signalMin = 100;
+
+    float lpSignalMax = 0;
+    float lpSignalMin = 100;
+    float hpSignalMax = 0;
+    float hpSignalMin = 100;
   
     // This loops collects VU data and does beat detection for 50 mS
     while (millis() - startMillis < sampleWindow)
     {
       sample_i = analogRead(AUDIO_INPUT);
+      
       if (sample_i < 1024)  // toss out spurious readings
       {
         if (sample_i > signalMax)
@@ -214,7 +275,34 @@ unsigned int read_vu_meter_and_beat_envelope(float &envelope) {
           signalMin = sample_i;  // save just the min levels
         }
       }
+
+      float sampleLP = lowPass.process((float)sample_i);
+      float sampleHP = highPass.process((float)sample_i);
+
+      if (sampleLP < 1024)  // toss out spurious readings
+      {
+        if (sampleLP > lpSignalMax)
+        {
+          lpSignalMax = sampleLP;  // save just the max levels
+        }
+        else if (sampleLP < lpSignalMin)
+        {
+          lpSignalMin = sampleLP;  // save just the min levels
+        }
+      }
       
+      if (sampleHP < 1024)  // toss out spurious readings
+      {
+        if (sampleHP > hpSignalMax)
+        {
+          hpSignalMax = sampleHP;  // save just the max levels
+        }
+        else if (sampleHP < hpSignalMin)
+        {
+          hpSignalMin = sampleHP;  // save just the min levels
+        }
+      }
+
       // Read ADC and center to +-512
       sample = (float)sample_i-503.f;
 
@@ -225,6 +313,20 @@ unsigned int read_vu_meter_and_beat_envelope(float &envelope) {
       if(value < 0)value=-value;
       envelope = envelopeFilter(value);
     }
+    peakToPeakLP = (unsigned int)(lpSignalMax - lpSignalMin);
+    peakToPeakHP = (unsigned int)(hpSignalMax - hpSignalMin);
+
+#if SERIAL_DEBUG
+    // debugging
+    Serial.print((unsigned int)peakToPeakLP, DEC);
+    Serial.print("  ");
+    Serial.print((unsigned int)peakToPeakHP, DEC);
+    Serial.print("  ");
+    Serial.print(signalMax - signalMin, DEC);
+    Serial.print("  ");
+    Serial.print("\n");
+#endif 
+    
     return signalMax - signalMin;  // max - min = peak-peak amplitude
 }
 
@@ -248,9 +350,10 @@ bool beat_detect(float &envelope) {
     return false;
 }
 
-void render_vu_plus_beat_end(unsigned int peakToPeak, bool is_beat, bool do_fade) {
+void render_vu_plus_beat_end(unsigned int peakToPeak, bool is_beat, bool do_fade, unsigned int lpvu, unsigned int hpvu) {
     int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH - 1) - 1;
     int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
+    int bias = lpvu;
     
     for (int j = STRIP_LENGTH - 1; j >= 0; j--)
     {
@@ -258,7 +361,7 @@ void render_vu_plus_beat_end(unsigned int peakToPeak, bool is_beat, bool do_fade
         if(j <= led && led >= 0) {
           // set VU color up to peak
           int color = map(j, 0, STRIP_LENGTH, 0, 255);
-          strip.setPixelColor(j, Wheel(color));
+          strip.setPixelColor(j, Wheel((color-bias)%256));
         }
         else if(j >= STRIP_LENGTH/2 && j < STRIP_LENGTH && is_beat) {
           strip.setPixelColor(j, beat_brightness,beat_brightness,beat_brightness);
@@ -286,7 +389,7 @@ void render_stream_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade) {
 }
 
 // this effect shifts colours along the strip on the beat.
-void render_shoot_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade) {
+void render_shoot_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade, unsigned int lpvu, unsigned int hpvu) {
     // only VU half the strip; for the effect to work it needs headroom.
     int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH >> 1 - 1) - 1;
     
@@ -306,9 +409,10 @@ void render_shoot_pixels(unsigned int peakToPeak, bool is_beat, bool do_fade) {
     }  
 }
 
-void render_vu_plus_beat_interleave(unsigned int peakToPeak, bool is_beat, bool do_fade) {
+void render_vu_plus_beat_interleave(unsigned int peakToPeak, bool is_beat, bool do_fade, unsigned int lpvu, unsigned int hpvu) {
   int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH - 1) - 1;
   int beat_brightness = map(peakToPeak, 0, maximum, 0, 255);
+  int bias = lpvu;
 
   for (int j = 0; j < STRIP_LENGTH; j++ ) {
     if(j % 2) {
@@ -317,7 +421,7 @@ void render_vu_plus_beat_interleave(unsigned int peakToPeak, bool is_beat, bool 
       if(j <= led && led >= 0) {
         // set VU color up to peak
         int color = map(j, 0, STRIP_LENGTH, 0, 255);
-        strip.setPixelColor(j, Wheel(color));
+        strip.setPixelColor(j, Wheel((color-bias)%256));
       } 
     } else if(is_beat) {
     // beats
@@ -360,10 +464,11 @@ void render_beat_line(unsigned int peakToPeak, bool is_beat, bool do_fade) {
     }
 }
 
-void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char fade_type) {
+void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char fade_type, unsigned int lpvu, unsigned int hpvu) {
     uint32_t color;
     // 2 "pixels" "below" the strip, to exclude the noise floor from the VU
     int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH/2);
+    int bias = lpvu;
     
     for (int j = 0; j <= STRIP_LENGTH/4; j++)
     {
@@ -373,9 +478,9 @@ void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char 
         color = map(j, 0, STRIP_LENGTH/4, 0, 255);
         switch(fade_type) {
           default:
-          case 0: color = Wheel(color); break;
-          case 1: color = Wheel2(color); break;
-          case 2: color = Wheel3(color); break;
+          case 0: color = Wheel((color+bias)%256); break;
+          case 1: color = Wheel2((color+bias)%256); break;
+          case 2: color = Wheel3((color+bias)%256); break;
         }
         strip.setPixelColor(j, color);
         strip.setPixelColor((STRIP_LENGTH/2)+j, color);
@@ -384,9 +489,9 @@ void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char 
         color = map(j, 0, STRIP_LENGTH/4, 255, 0);
         switch(fade_type) {
           default:
-          case 0: color = Wheel(color); break;
-          case 1: color = Wheel2(color); break;
-          case 2: color = Wheel3(color); break;
+          case 0: color = Wheel((color-bias)%256); break;
+          case 1: color = Wheel2((color-bias)%256); break;
+          case 2: color = Wheel3((color-bias)%256); break;
         }
         strip.setPixelColor((STRIP_LENGTH/2)-j, color);
         strip.setPixelColor((STRIP_LENGTH)-j, color);
@@ -617,4 +722,35 @@ float beatFilter(float sample) {
     yv[2] = (xv[2] - xv[0])
         + (-0.7169861741f * yv[0]) + (1.4453653501f * yv[1]);
     return yv[2];
+}
+
+void print_float(float f, int num_digits)
+{
+    int f_int;
+    int pows_of_ten[4] = {1, 10, 100, 1000};
+    int multiplier, whole, fract, d, n;
+
+    multiplier = pows_of_ten[num_digits];
+    if (f < 0.0)
+    {
+        f = -f;
+        Serial.print("-");
+    }
+    whole = (int) f;
+    fract = (int) (multiplier * (f - (float)whole));
+
+    Serial.print(whole);
+    Serial.print(".");
+
+    for (n=num_digits-1; n>=0; n--) // print each digit with no leading zero suppression
+    {
+         d = fract / pows_of_ten[n];
+         Serial.print(d);
+         fract = fract % pows_of_ten[n];
+    }
+}
+
+float mapfloat(float x, float in_min, float in_max, float out_min, float out_max)
+{
+ return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
