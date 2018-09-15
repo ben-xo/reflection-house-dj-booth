@@ -29,7 +29,7 @@
 
 // modes 0 to MAX_MODE are effects
 #define MAX_MODE 10
-#define MAX_AUTO_MODE 7
+#define MAX_AUTO_MODE 8
 
 // Parameter 1 = number of pixels in strip
 // Parameter 2 = pin number (most are valid)
@@ -155,7 +155,7 @@ void loop()
     unsigned int peakToPeakLP;
     unsigned int peakToPeakHP;
 
-    check_mode_change_button();
+    //check_mode_change_button();
 
     // 4 loops (~50ms each). VU is on a 50ms loop, beat detection is on a 200ms loop
     // also, do fades every other render
