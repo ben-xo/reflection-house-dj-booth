@@ -64,7 +64,7 @@ int beatless_count = 0;
 bool auto_mode = true;
 
 // button to change modes. button_was_pushed used to track when button was released.
-char mode = 0;
+char mode = 9;
 bool button_was_pushed = false;
 
 static float lowPassCoeffs[] = {
@@ -185,7 +185,7 @@ void loop()
       }
 
       // change mode after 128 beats or 30 beatless seconds
-      if(beat_count > 128 || beatless_count > 150) {
+      if(beat_count > 256 || beatless_count > 150) {
         mode++;
         if(mode > MAX_AUTO_MODE) {
           mode = 0;
@@ -226,15 +226,17 @@ void render(unsigned int peakToPeak, bool is_beat, bool do_fade, char mode, unsi
       case 7:
         render_double_vu(peakToPeak, is_beat, do_fade, 2, lpvu, hpvu);
         break;
-
-      // these modes suck
       case 8:
         render_beat_line(peakToPeak, is_beat, do_fade);
         break;
       case 9:
+        render_bar_segments(peakToPeak, is_beat, do_fade, lpvu);
+        break;
+        
+      case 10:
         render_beat_flash_1_pixel(is_beat);
         break;
-      case 10:
+      case 11:
         render_threshold();
         break;
       default:
@@ -461,6 +463,41 @@ void render_beat_line(unsigned int peakToPeak, bool is_beat, bool do_fade) {
       strip.setPixelColor(0, 255, 255, 255);
     } else {
       strip.setPixelColor(0, color >> 2, color >> 2, color >> 2);
+    }
+}
+
+long was_beat_recently_time = 0;
+int bar_segment_pattern=0;
+long long unsigned bar_patterns[] = {
+  0b1111000011110000111100001111000011110000111100001111000011110000,
+  0b1111111100000000111111110000000011111111000000001111111100000000,
+  0b1111111111111111000000000000000011111111111111110000000000000000,
+  0b1111111111111111111111111111111100000000000000000000000000000000,
+  0b0000111100001111000011110000111100001111000011110000111100001111,
+  0b0000000011111111000000001111111100000000111111110000000011111111,
+  0b0000000000000000111111111111111100000000000000001111111111111111,
+  0b0000000000000000000000000000000011111111111111111111111111111111,
+};
+boolean _in_current_bar_segment(int j) {
+  int offset = bar_segment_pattern;
+  return (bar_patterns[offset] >> j) & 0b0000000000000000000000000000000000000000000000000000000000000001;
+}
+void render_bar_segments(unsigned int peakToPeak, bool is_beat, bool do_fade, unsigned int lpvu) {
+    uint32_t color = Wheel((map(peakToPeak, 0, maximum, 0, 255)+(bar_segment_pattern << 4))%256);
+    for (int j = STRIP_LENGTH - 1; j > 0; j--)
+    {
+      if(_in_current_bar_segment(j)) {
+        strip.setPixelColor(j, color);
+      } else {
+        if(do_fade) {
+          fade_pixel(j);
+        }
+      }
+     }
+    if(is_beat && millis() > was_beat_recently_time + 250) {
+      was_beat_recently_time = millis();
+      bar_segment_pattern++;
+      if(bar_segment_pattern > 7) bar_segment_pattern=0;
     }
 }
 
