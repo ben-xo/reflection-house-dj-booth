@@ -467,7 +467,9 @@ void render_beat_line(unsigned int peakToPeak, bool is_beat, bool do_fade) {
 }
 
 long was_beat_recently_time = 0;
+uint32_t last_bar_color = 0;
 int bar_segment_pattern=0;
+#define BAR_PATTERN_SIZE 8
 long long unsigned bar_patterns[] = {
   0b1111000011110000111100001111000011110000111100001111000011110000,
   0b1111111100000000111111110000000011111111000000001111111100000000,
@@ -483,11 +485,14 @@ boolean _in_current_bar_segment(int j) {
   return (bar_patterns[offset] >> j) & 0b0000000000000000000000000000000000000000000000000000000000000001;
 }
 void render_bar_segments(unsigned int peakToPeak, bool is_beat, bool do_fade, unsigned int lpvu) {
-    uint32_t color = Wheel((map(peakToPeak, 0, maximum, 0, 255)+(bar_segment_pattern << 4))%256);
+    uint32_t new_bar_color = Wheel((map(peakToPeak, 0, maximum/2, 0, 255)+(bar_segment_pattern << 4))%256);
+    uint32_t color = (((new_bar_color) >> 1) & 0x7F7F7F7F) + ((last_bar_color >> 1) & 0x7F7F7F7F);
+    
     for (int j = STRIP_LENGTH - 1; j > 0; j--)
     {
       if(_in_current_bar_segment(j)) {
         strip.setPixelColor(j, color);
+        last_bar_color = color;
       } else {
         if(do_fade) {
           fade_pixel(j);
@@ -496,7 +501,7 @@ void render_bar_segments(unsigned int peakToPeak, bool is_beat, bool do_fade, un
      }
     if(is_beat && millis() > was_beat_recently_time + 250) {
       was_beat_recently_time = millis();
-      bar_segment_pattern++;
+      bar_segment_pattern = random(0,BAR_PATTERN_SIZE);
       if(bar_segment_pattern > 7) bar_segment_pattern=0;
     }
 }
@@ -507,7 +512,7 @@ void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char 
     int led = map(peakToPeak, 0, maximum, -2, STRIP_LENGTH/2);
     int bias = lpvu;
     
-    for (int j = 0; j <= STRIP_LENGTH/4; j++)
+    for (int j = 0; j < STRIP_LENGTH/4; j++)
     {
       if(j <= led && led >= 0) {
         
@@ -526,9 +531,9 @@ void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char 
         color = map(j, 0, STRIP_LENGTH/4, 255, 0);
         switch(fade_type) {
           default:
-          case 0: color = Wheel((color-bias)%256); break;
-          case 1: color = Wheel2((color-bias)%256); break;
-          case 2: color = Wheel3((color-bias)%256); break;
+          case 0: color = Wheel((color+bias)%256); break;
+          case 1: color = Wheel2((color+bias)%256); break;
+          case 2: color = Wheel3((color+bias)%256); break;
         }
         strip.setPixelColor((STRIP_LENGTH/2)-j, color);
         strip.setPixelColor((STRIP_LENGTH)-j, color);
