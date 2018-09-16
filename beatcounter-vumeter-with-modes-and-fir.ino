@@ -535,14 +535,14 @@ void render_double_vu(unsigned int peakToPeak, bool is_beat, bool do_fade, char 
           case 1: color = Wheel2((color+bias)%256); break;
           case 2: color = Wheel3((color+bias)%256); break;
         }
-        strip.setPixelColor((STRIP_LENGTH/2)-j, color);
-        strip.setPixelColor((STRIP_LENGTH)-j, color);
+        strip.setPixelColor((STRIP_LENGTH/2)-j-1, color);
+        strip.setPixelColor((STRIP_LENGTH)-j-1, color);
       }
       else if(do_fade) {
         fade_pixel(j);
         fade_pixel((STRIP_LENGTH/2)+j);
-        fade_pixel((STRIP_LENGTH/2)-j);
-        fade_pixel((STRIP_LENGTH  )-j);
+        fade_pixel((STRIP_LENGTH/2)-j-1);
+        fade_pixel((STRIP_LENGTH  )-j-1);
       }
     }  
 }
